@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import requests
 import getpass
 import urllib3
@@ -9,12 +8,13 @@ import glob
 from typing import Tuple, Optional, Dict, List
 from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
 from utils.utils import run_command
-from launchers.lutris import get_lutris_command
+from launchers.lutris import get_lutris_command, generate_lutris_script
 from launchers.heroic import get_heroic_command
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
+from requests.utils import dict_from_cookiejar, cookiejar_from_dict
 
-#Remove SSL warnings
+# Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 INSTALLATION_TYPE = None
@@ -218,8 +218,15 @@ def get_auth_session() -> Optional[requests.Session]:
 def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
     """Add a game to the Sunshine configuration."""
     if runner == "Lutris":
-        lutris_cmd = get_lutris_command()
-        cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
+        # Generate the bash script for the Lutris game
+        script_path = generate_lutris_script(game_id)
+        if script_path:
+            cmd = script_path
+        else:
+            # Fallback to the old method if script generation fails
+            print(f"Warning: Failed to generate script for {game_name}, using fallback launch method")
+            lutris_cmd = get_lutris_command()
+            cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
     elif runner in ["legendary", "gog", "nile", "sideload"]:
         heroic_cmd, _ = get_heroic_command()
         cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"

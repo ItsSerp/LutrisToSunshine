@@ -29,3 +29,35 @@ def list_lutris_games() -> List[Tuple[str, str]]:
     result = run_command(cmd)
     games = parse_json_output(result)
     return [(game['id'], game['name']) for game in games] if games else []
+
+def generate_lutris_script(game_id: str) -> Optional[str]:
+    """Generate a bash script for launching a Lutris game.
+    
+    Args:
+        game_id: The Lutris game ID
+        
+    Returns:
+        The path to the generated script, or None if generation failed
+    """
+    # Ensure the scripts directory exists
+    scripts_dir = os.path.expanduser("~/Games/scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+    
+    script_path = os.path.join(scripts_dir, f"{game_id}.sh")
+    
+    # Get the Lutris command
+    lutris_cmd = get_lutris_command()
+    if not lutris_cmd:
+        return None
+    
+    # Run lutris -b to generate the bash script
+    cmd = f"{lutris_cmd} -b {script_path} {game_id}"
+    result = run_command(cmd)
+    
+    if result.returncode == 0 and os.path.exists(script_path):
+        # Make the script executable
+        os.chmod(script_path, 0o755)
+        return script_path
+    else:
+        print(f"Warning: Failed to generate Lutris script for game ID {game_id}")
+        return None
