@@ -28,7 +28,7 @@ def list_lutris_games() -> List[Tuple[str, str]]:
     cmd = f"{lutris_cmd} -lo --json"
     result = run_command(cmd)
     games = parse_json_output(result)
-    return [(game['id'], game['name']) for game in games] if games else []
+    return [(game['id'], game['name']) for game in games if game.get('runner') != 'steam'] if games else []
 
 def generate_lutris_script(game_id: str) -> Optional[str]:
     """Generate a bash script for launching a Lutris game.

@@ -1,5 +1,6 @@
 import sys
 import os
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
@@ -17,6 +18,26 @@ from launchers.retroarch import detect_retroarch_installation, list_retroarch_ga
 
 def main():
     try:
+        # Parse command-line arguments
+        parser = argparse.ArgumentParser(description='Add games from various launchers to Sunshine.')
+        parser.add_argument('--lutris', action='store_true', help='Only list Lutris games')
+        parser.add_argument('--heroic', action='store_true', help='Only list Heroic games')
+        parser.add_argument('--bottles', action='store_true', help='Only list Bottles games')
+        parser.add_argument('--steam', action='store_true', help='Only list Steam games')
+        parser.add_argument('--ryubing', action='store_true', help='Only list Ryubing games')
+        parser.add_argument('--retroarch', action='store_true', help='Only list RetroArch games')
+        args = parser.parse_args()
+        
+        # Determine which sources to use
+        # If no flags are specified, use all available sources
+        use_all_sources = not any([args.lutris, args.heroic, args.bottles, args.steam, args.ryubing, args.retroarch])
+        use_lutris = use_all_sources or args.lutris
+        use_heroic = use_all_sources or args.heroic
+        use_bottles = use_all_sources or args.bottles
+        use_steam = use_all_sources or args.steam
+        use_ryubing = use_all_sources or args.ryubing
+        use_retroarch = use_all_sources or args.retroarch
+        
         sunshine_installed, installation_type = detect_sunshine_installation()
         if not sunshine_installed:
             print("Error: No Sunshine installation detected.")
@@ -39,13 +60,14 @@ def main():
             print("Error: Could not obtain a valid authenticated session. Exiting.")
             return
 
-        lutris_command = get_lutris_command()
-        heroic_command, _ = get_heroic_command()
-        bottles_installed = detect_bottles_installation()
-        steam_installed, _ = detect_steam_installation()
+        # Only detect sources that are requested
+        lutris_command = get_lutris_command() if use_lutris else None
+        heroic_command, _ = get_heroic_command() if use_heroic else (None, None)
+        bottles_installed = detect_bottles_installation() if use_bottles else False
+        steam_installed, _ = detect_steam_installation() if use_steam else (False, None)
         steam_command = get_steam_command() if steam_installed else ""
-        ryubing_installed = detect_ryubing_installation()
-        retroarch_installed = detect_retroarch_installation()
+        ryubing_installed = detect_ryubing_installation() if use_ryubing else False
+        retroarch_installed = detect_retroarch_installation() if use_retroarch else False
 
         if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed and not retroarch_installed:
             print("No Lutris, Heroic, Bottles, Steam, Ryubing, or RetroArch installation detected.")
