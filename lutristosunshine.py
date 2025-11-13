@@ -6,7 +6,7 @@ from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
 from sunshine.sunshine import get_covers_path, set_installation_type
 from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
 from utils.input import get_yes_no_input, get_user_selection
-from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps, get_auth_token, is_sunshine_running
+from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps, is_sunshine_running, get_auth_session
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -31,9 +31,12 @@ def main():
             print("Error: Sunshine is not running. Please start Sunshine and try again.")
             return
 
-        token = get_auth_token() 
-        if not token:
-            print("Error: Could not obtain a valid authentication token. Exiting.")
+        # Obtain an authenticated session (cookie-based). Previously this used get_auth_token().
+        # The new sunshine module authenticates via cookies/sessions; acquire a session here
+        # to verify credentials and ensure the script can proceed.
+        session = get_auth_session()
+        if not session:
+            print("Error: Could not obtain a valid authenticated session. Exiting.")
             return
 
         lutris_command = get_lutris_command()

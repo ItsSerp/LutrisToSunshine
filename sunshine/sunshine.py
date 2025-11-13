@@ -47,7 +47,7 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
     if run_command("flatpak list | grep dev.lizardbyte.app.Sunshine").returncode == 0:
         return True, "flatpak"
     # Check for native installation
-    elif run_command("which sunshine").returncode == 0:
+    elif run_command("which apollo").returncode == 0:
         return True, "native"
     # Check for AppImage installation
     else:
@@ -96,53 +96,124 @@ def is_sunshine_running() -> bool:
     try:
         # Run the ps command to check for the Sunshine process
         output = subprocess.check_output(["ps", "-A"], stderr=subprocess.STDOUT).decode()
-        return "sunshine" in output.lower()  # Check if "sunshine" is present in the process list
+        return "apollo" in output.lower() or "sunshine" in output.lower()  # Check if "apollo" or "sunshine" is present in the process list
     except subprocess.CalledProcessError:
         return False
 
-def get_auth_token() -> Optional[str]:
-    """Retrieves or generates an authentication token."""
-    token_path = os.path.join(get_credentials_path(), "auth_token.txt")
+def _cookies_file_path():
+    return os.path.join(get_credentials_path(), "cookies.json")
 
-    # Check if Sunshine is running BEFORE attempting any authentication
+def _save_session_cookies(session: requests.Session):
+    os.makedirs(get_credentials_path(), exist_ok=True)
+    cookies_dict = dict_from_cookiejar(session.cookies)
+    try:
+        with open(_cookies_file_path(), "w") as f:
+            json.dump(cookies_dict, f)
+    except Exception as e:
+        print(f"Warning: Failed to save cookies: {e}")
+
+def _load_session_from_cookies() -> requests.Session:
+    session = requests.Session()
+    cookie_file = _cookies_file_path()
+    if os.path.exists(cookie_file):
+        try:
+            with open(cookie_file, "r") as f:
+                cookies_dict = json.load(f)
+            session.cookies = cookiejar_from_dict(cookies_dict)
+        except Exception:
+            # If cookie file is corrupt, remove it
+            try:
+                os.remove(cookie_file)
+            except Exception:
+                pass
+    return session
+
+def get_auth_session() -> Optional[requests.Session]:
+    """
+    Retrieves or creates a requests.Session authenticated with Sunshine via cookies.
+    This function:
+      - Returns a session loaded with saved cookies if valid.
+      - Otherwise prompts for credentials and attempts to log in to Sunshine to obtain cookies.
+      - Saves the cookies for future runs.
+    """
     if not is_sunshine_running():
         print("Error: Sunshine is not running. Please start Sunshine and try again.")
         return None
 
-    # Check for an existing token (only if Sunshine is running)
-    if os.path.exists(token_path):
-        with open(token_path, 'r') as f:
-            token = f.read().strip()
-
-        # Validate the existing token
-        _, error = sunshine_api_request("GET", "/api/apps", token=token)
-        if error:
-            print(f"Error: Existing token is invalid. Please re-enter your credentials.")
-            os.remove(token_path)  # Remove the invalid token file
+    # Try to reuse saved cookies
+    session = _load_session_from_cookies()
+    try:
+        resp = session.get(f"{SUNSHINE_API_URL}/api/apps", verify=False, timeout=10)
+        if resp.status_code == 200:
+            return session
         else:
-            return token
+            # saved cookies invalid; remove cookie file and prompt for login
+            try:
+                os.remove(_cookies_file_path())
+            except Exception:
+                pass
+    except requests.exceptions.RequestException:
+        # Could not use saved cookies; proceed to login prompt
+        pass
 
-    # If no valid token exists, prompt for credentials (only if Sunshine is running)
+    # Prompt for credentials and perform login attempts
     username, password = get_sunshine_credentials()
     if not username or not password:
         return None
 
-    auth_header = f"{username}:{password}"
-    encoded_auth = base64.b64encode(auth_header.encode()).decode()
-    token = f"Basic {encoded_auth}"
+    session = requests.Session()
 
-    # Validate the new token
-    _, error = sunshine_api_request("GET", "/api/apps", token=token)
-    if error:
-        print(f"Error: Authentication failed. Please check your credentials.")
-        return None
+    # Try a list of common login endpoints and payload formats
+    login_endpoints = [
+        "/api/login",
+        "/login",
+        "/auth/login",
+        "/api/auth/login"
+    ]
 
-    # Save the new token if it's valid
-    os.makedirs(get_credentials_path(), exist_ok=True)
-    with open(token_path, 'w') as f:
-        f.write(token)
+    login_payloads = [
+        ("json", {"username": username, "password": password}),
+        ("form", {"username": username, "password": password}),
+    ]
 
-    return token
+    for endpoint in login_endpoints:
+        url = f"{SUNSHINE_API_URL}{endpoint}"
+        for mode, payload in login_payloads:
+            try:
+                if mode == "json":
+                    resp = session.post(url, json=payload, verify=False, timeout=10)
+                else:
+                    resp = session.post(url, data=payload, verify=False, timeout=10)
+            except requests.exceptions.RequestException:
+                continue
+
+            # If the server set cookies or returned success, test the session
+            try:
+                test = session.get(f"{SUNSHINE_API_URL}/api/apps", verify=False, timeout=10)
+                if test.status_code == 200:
+                    _save_session_cookies(session)
+                    return session
+            except requests.exceptions.RequestException:
+                continue
+
+    # As a fallback, some Sunshine setups accept HTTP Basic auth and then set session cookies.
+    try:
+        resp = requests.get(f"{SUNSHINE_API_URL}/api/apps", auth=(username, password), verify=False, timeout=10)
+        # If server set cookies, capture them by reusing a session with basic auth
+        session = requests.Session()
+        try:
+            # Perform a request with auth using session so cookies set by server are stored in session
+            resp2 = session.get(f"{SUNSHINE_API_URL}/api/apps", auth=(username, password), verify=False, timeout=10)
+            if resp2.status_code == 200:
+                _save_session_cookies(session)
+                return session
+        except requests.exceptions.RequestException:
+            pass
+    except requests.exceptions.RequestException:
+        pass
+
+    print("Error: Authentication failed. Could not obtain session cookies from Sunshine.")
+    return None
 
 def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
     """Add a game to the Sunshine configuration."""
@@ -210,23 +281,24 @@ def sunshine_api_request(method, endpoint, **kwargs):
         Tuple[Optional[Dict], Optional[str]]: A tuple containing the JSON response data 
                                               (if successful) and an error message (if any).
     """
-    token = kwargs.pop("token", None)  # Get token from kwargs, if provided
-    if token is None:
-        token = get_auth_token()  # Get the token only if not provided
+    # Allow callers to pass an existing session; otherwise obtain one
+    session = kwargs.pop("session", None)
+    if session is None:
+        session = get_auth_session()
 
-    if not token:
-        return None, "Error: Could not obtain authentication token."
-
-    headers = {
-        "Authorization": token
-    }
+    if not session:
+        return None, "Error: Could not obtain authenticated session."
 
     url = f"{SUNSHINE_API_URL}{endpoint}"
 
     try:
-        response = requests.request(method, url, headers=headers, verify=False, **kwargs)
+        response = session.request(method, url, verify=False, **kwargs)
         response.raise_for_status()
-        return response.json(), None
+        try:
+            return response.json(), None
+        except ValueError:
+            # Not JSON; return text
+            return {"text": response.text}, None
 
     except requests.exceptions.RequestException as e:
         return None, str(e)
